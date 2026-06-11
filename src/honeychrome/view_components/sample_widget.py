@@ -396,8 +396,22 @@ class SampleWidget(QWidget):
         ssc = self.controller.experiment.settings['raw']['single_stain_controls_subdirectory']
         exp_dir = self.controller.experiment_dir
 
+        def _friendly_label(setting_value, fallback):
+            # Display name for a folder setting. Resolves symlinks (created by the
+            # "link to existing folder" import option as opaque "Link_to_..." names)
+            # to the real target folder's name, so the user sees a meaningful label
+            # tied to the folder they linked rather than the on-disk symlink name.
+            try:
+                name = (exp_dir / setting_value).resolve().name
+            except OSError:
+                name = ''
+            name = name or Path(setting_value).name
+            if name.startswith('Link_to_'):
+                name = name[len('Link_to_'):]
+            return name or fallback
+
         raw_path = str(exp_dir / raw)
-        raw_label = Path(raw).name  # e.g. "Raw"
+        raw_label = _friendly_label(raw, 'Raw')
 
         if Path(ssc).is_relative_to(raw):
             # Normal case: ssc is nested inside raw, walking raw covers everything.
@@ -407,7 +421,7 @@ class SampleWidget(QWidget):
             # Pass it as a second root so both appear in the modal with their
             # user-facing names from the experiment settings.
             ssc_path = str(exp_dir / ssc)
-            ssc_label = Path(ssc).name  # e.g. "SSC" or "Link_to__..."
+            ssc_label = _friendly_label(ssc, 'Single Stain Controls')
             dialog = BatchExportSamplesModal(self, self.bus, raw_path, exp_dir, root_label=raw_label, extra_roots=[(ssc_path, ssc_label)])
 
         dialog.open()
