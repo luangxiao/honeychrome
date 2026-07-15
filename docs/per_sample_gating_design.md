@@ -28,7 +28,7 @@ FlowKit already supports per-sample gates via `add_gate(..., sample_id=...)` / `
 - Backward compatible: existing `.kit` files keep working (single implicit template).
 
 **Non-goals (this feature)**
-- Full arbitrary per-sample geometry overrides (may be added later as "detach/override").
+- **No manual per-sample gate override.** A gate edit always edits the template; to gate a sample differently, **assign it a different template**. (Per-sample variation comes only from dynamic dimensions.) A future "detach this sample" override is explicitly deferred.
 - Cross-template statistics reconciliation beyond shared gate names.
 - Changing the GatingML standard; per-sample/dynamic data is stored **outside** GML.
 
@@ -113,9 +113,10 @@ Each checkpoint is independently testable; ✅ = implemented on this branch so f
 - [x] C1.6 Unit tests cover C1.1–C1.5 and pass; no existing tests break.
 
 **Phase 2 — Template model + storage (no behaviour change)**
-- [ ] C2.1 `GatingTemplate` (base GML + dynamic specs) load/save round-trips.
-- [ ] C2.2 Old `.kit` without templates migrates to a single `default` template; identical gating output.
-- [ ] C2.3 Sample→template assignment stored/read; missing assignment ⇒ `default`.
+- [x] C2.1 `GatingTemplate` (base GML + dynamic specs) load/save round-trips. *(model + tests done)*
+- [x] C2.2 Old `.kit` without templates migrates to a single `default` template. *(`migrate_cytometry_templates` + tests done)*
+- [x] C2.3 Sample→template assignment read; missing assignment ⇒ `default`. *(`template_for_sample` + tests done)*
+- [ ] C2.4 Wire the above into `experiment_model` `create/load/save` (deferred until the `.kit` format change is agreed with the team).
 
 **Phase 3 — Runtime instantiation + per-sample lookup tables**
 - [ ] C3.1 `instantiate_template_for_sample` returns a `GatingStrategy` equal to today's for absolute-only templates.
@@ -147,9 +148,9 @@ Each checkpoint is independently testable; ✅ = implemented on this branch so f
 | `view_components/regions_of_interest.py` | dynamic-dim ROI edits relative spec | 4 |
 | `tests/test_gating_templates.py` (new) | Phase-1 checkpoints | 1 |
 
-## 10. Risks & open questions
+## 10. Decisions & remaining questions
 
-- **Edit semantics** confirmed = template edits. A future "detach this sample" override is out of scope but the model leaves room (per-sample instance can carry an override map).
+- **Edit semantics — DECIDED**: a gate edit always edits the **template**; there is **no** "only this sample" option. Samples differ only by (a) being assigned a different template, or (b) dynamic dimensions. Manual per-sample override is out of scope.
 - **Dynamic vocabulary**: start with `time`; keep the registry small and documented. Percentile vs fraction semantics to be decided per kind.
 - **Lookup-table memory**: dynamic tables are per (sample, dynamic gate) — cache with sample eviction.
 - **Cross-template comparison** in statistics needs guardrails (Phase 5).

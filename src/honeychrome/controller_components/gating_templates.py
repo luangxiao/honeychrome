@@ -93,3 +93,83 @@ def _time_resolver(params: dict, context: SampleContext, channel: str) -> tuple[
 
 
 register_dynamic_resolver("time", _time_resolver)
+
+
+# --- Template model + persistence (Phase 2) ---------------------------------
+
+DEFAULT_TEMPLATE_NAME = "default"
+
+
+def dynamic_key(gate_id: str, channel: str) -> str:
+    """Stable key for a dynamic dimension within a template/mode."""
+    return f"{gate_id}|{channel}"
+
+
+@dataclass
+class GatingTemplate:
+    """A named gating template.
+
+    The base hierarchy is stored as GatingML (``raw_gml`` / ``unmixed_gml``);
+    ``dynamic_dimensions`` holds the specs GatingML cannot express, keyed by
+    mode then ``dynamic_key(gate_id, channel)``.
+    """
+
+    name: str
+    raw_gml: str = ""
+    unmixed_gml: str = ""
+    dynamic_dimensions: dict = field(default_factory=lambda: {"raw": {}, "unmixed": {}})
+
+    def to_dict(self) -> dict:
+        return {
+            "raw_gml": self.raw_gml,
+            "unmixed_gml": self.unmixed_gml,
+            "dynamic_dimensions": self.dynamic_dimensions,
+        }
+
+    @classmethod
+    def from_dict(cls, name: str, data: dict) -> "GatingTemplate":
+        dyn = data.get("dynamic_dimensions") or {}
+        dyn.setdefault("raw", {})
+        dyn.setdefault("unmixed", {})
+        return cls(
+            name=name,
+            raw_gml=data.get("raw_gml", ""),
+            unmixed_gml=data.get("unmixed_gml", ""),
+            dynamic_dimensions=dyn,
+        )
+
+
+def build_default_template(raw_gml: str, unmixed_gml: str) -> GatingTemplate:
+    """Synthesize the ``default`` template from legacy experiment gating.
+
+    All dimensions stay absolute, so gating output is identical to today.
+    """
+    return GatingTemplate(
+        name=DEFAULT_TEMPLATE_NAME,
+        raw_gml=raw_gml or "",
+        unmixed_gml=unmixed_gml or "",
+    )
+
+
+def migrate_cytometry_templates(cytometry: dict) -> dict:
+    """Return the ``gating_templates`` dict for an experiment's cytometry.
+
+    Old ``.kit`` files (no ``gating_templates``) get a single ``default``
+    template synthesized from the legacy ``raw_gating`` / ``gating`` GML.
+    Non-destructive: existing templates are returned unchanged and legacy
+    fields are left in place.
+    """
+    templates = cytometry.get("gating_templates")
+    if templates:
+        return templates
+    default = build_default_template(
+        cytometry.get("raw_gating", ""),
+        cytometry.get("gating", ""),
+    )
+    return {default.name: default.to_dict()}
+
+
+def template_for_sample(sample_path: str, samples: dict) -> str:
+    """Template id assigned to a sample, defaulting to ``default``."""
+    assignments = samples.get("sample_template_assignments", {})
+    return assignments.get(sample_path, DEFAULT_TEMPLATE_NAME)
