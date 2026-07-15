@@ -116,7 +116,7 @@ Each checkpoint is independently testable; ✅ = implemented on this branch so f
 - [x] C2.1 `GatingTemplate` (base GML + dynamic specs) load/save round-trips. *(model + tests done)*
 - [x] C2.2 Old `.kit` without templates migrates to a single `default` template. *(`migrate_cytometry_templates` + tests done)*
 - [x] C2.3 Sample→template assignment read; missing assignment ⇒ `default`. *(`template_for_sample` + tests done)*
-- [ ] C2.4 Wire the above into `experiment_model` `create/load/save` (deferred until the `.kit` format change is agreed with the team).
+- [x] C2.4 Wire the above into `experiment_model` `create/load/save`; legacy `.kit` files migrate on load (verified against a real pre-feature `.kit`).
 
 **Phase 3 — Runtime instantiation + per-sample lookup tables**
 - [ ] C3.1 `instantiate_template_for_sample` returns a `GatingStrategy` equal to today's for absolute-only templates.
