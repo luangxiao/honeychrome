@@ -9,11 +9,30 @@ dimensions it returns the strategy unchanged (identical to today's behaviour).
 """
 from copy import deepcopy
 
+import numpy as np
+
 from honeychrome.controller_components.gating_templates import (
     DimensionSpec,
     SampleContext,
     resolve_spec,
 )
+
+
+def sample_context_from_events(event_data, pnn, channels=None):
+    """Build a ``SampleContext`` (per-channel ``(min, max)``) from a sample.
+
+    ``event_data`` is an ``(n_events, n_channels)`` array; ``pnn`` the channel
+    order. Dynamic resolvers (e.g. Time) read these ranges to adapt a template
+    to the sample. Channels with no events are skipped.
+    """
+    wanted = channels if channels is not None else pnn
+    ranges = {}
+    for channel in wanted:
+        if channel in pnn:
+            column = event_data[:, pnn.index(channel)]
+            if column.size:
+                ranges[channel] = (float(np.min(column)), float(np.max(column)))
+    return SampleContext(channel_ranges=ranges)
 
 
 def instantiate_template_for_sample(base_strategy, dynamic_specs, sample_context):
