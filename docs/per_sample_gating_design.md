@@ -119,8 +119,8 @@ Each checkpoint is independently testable; ✅ = implemented on this branch so f
 - [x] C2.4 Wire the above into `experiment_model` `create/load/save`; legacy `.kit` files migrate on load (verified against a real pre-feature `.kit`).
 
 **Phase 3 — Runtime instantiation + per-sample lookup tables**
-- [ ] C3.1 `instantiate_template_for_sample` returns a `GatingStrategy` equal to today's for absolute-only templates.
-- [ ] C3.2 Dynamic (Time) gate produces a per-sample lookup table; `apply_gates_in_place` uses it.
+- [x] C3.1 `instantiate_template_for_sample` returns a `GatingStrategy` equal to today's for absolute-only templates, and resolves dynamic (Time) dims per sample. *(gating_instantiation.py + tests done)*
+- [ ] C3.2 Dynamic (Time) gate produces a per-sample lookup table; `apply_gates_in_place` uses it. *(live-pipeline wiring — needs app validation)*
 - [ ] C3.3 Time index-clamp hack removed; membership correct across samples with different durations.
 - [ ] C3.4 Static tables still shared/cached per template (no perf regression for absolute gates).
 
