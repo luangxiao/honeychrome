@@ -35,6 +35,54 @@ def sample_context_from_events(event_data, pnn, channels=None):
     return SampleContext(channel_ranges=ranges)
 
 
+def resolve_dynamic_dimensions_in_place(gating_strategy, dynamic_specs, sample_context):
+    """Resolve a template's dynamic dimensions on ``gating_strategy`` in place.
+
+    For each dynamic spec, the matching gate dimension's ``(min, max)`` is set to
+    the value resolved for this sample. Unlike :func:`instantiate_template_for_sample`
+    (which copies), this mutates the strategy you pass in — used by the live
+    controller so the shared gating strategy and its lookup tables update for the
+    currently loaded sample.
+
+    Parameters
+    ----------
+    gating_strategy : flowkit.GatingStrategy
+        Strategy to mutate (its gate dimensions are updated).
+    dynamic_specs : dict
+        ``{ dynamic_key(gate_id, channel): {"kind": str, "params": dict} }``.
+    sample_context : SampleContext
+        Per-sample data used by resolvers (e.g. channel ranges).
+
+    Returns
+    -------
+    set[str]
+        Gate ids whose dimensions were changed, so the caller can rebuild just
+        those lookup tables.
+    """
+    affected = set()
+    if not dynamic_specs:
+        return affected
+
+    for key, spec_dict in dynamic_specs.items():
+        gate_id, channel = key.split("|", 1)
+        spec = DimensionSpec(
+            channel=channel,
+            mode="dynamic",
+            kind=spec_dict["kind"],
+            params=spec_dict.get("params", {}),
+        )
+        lo, hi = resolve_spec(spec, sample_context)
+
+        gate = gating_strategy.get_gate(gate_id)
+        dimension_ids = list(gate.get_dimension_ids())
+        if channel in dimension_ids:
+            dim = gate.dimensions[dimension_ids.index(channel)]
+            dim.min = lo
+            dim.max = hi
+            affected.add(gate_id)
+    return affected
+
+
 def instantiate_template_for_sample(base_strategy, dynamic_specs, sample_context):
     """Return a ``GatingStrategy`` with dynamic dimensions resolved for a sample.
 
@@ -51,20 +99,5 @@ def instantiate_template_for_sample(base_strategy, dynamic_specs, sample_context
         return base_strategy
 
     resolved = deepcopy(base_strategy)
-    for key, spec_dict in dynamic_specs.items():
-        gate_id, channel = key.split("|", 1)
-        spec = DimensionSpec(
-            channel=channel,
-            mode="dynamic",
-            kind=spec_dict["kind"],
-            params=spec_dict.get("params", {}),
-        )
-        lo, hi = resolve_spec(spec, sample_context)
-
-        gate = resolved.get_gate(gate_id)
-        dimension_ids = list(gate.get_dimension_ids())
-        if channel in dimension_ids:
-            dim = gate.dimensions[dimension_ids.index(channel)]
-            dim.min = lo
-            dim.max = hi
+    resolve_dynamic_dimensions_in_place(resolved, dynamic_specs, sample_context)
     return resolved

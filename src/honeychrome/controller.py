@@ -42,6 +42,15 @@ import time
 from honeychrome.experiment_model import ExperimentModel, check_fcs_matches_experiment
 from honeychrome.controller_components.functions import apply_gates_in_place, apply_transfer_matrix, generate_transformations, update_transforms, initialise_hists, calc_hists, calc_stats, initialise_stats, assign_default_transforms, define_quad_gates, define_range_gate, define_polygon_gate, define_rectangle_gate, define_ellipse_gate, add_recent_file, empty_queue_nowait, define_process_plots, get_set_or_initialise_label_offset, sample_from_fcs, build_display_label_map
 from honeychrome.controller_components.gml_functions_mod_from_flowkit import from_gml, to_gml
+from honeychrome.controller_components.gating_templates import (
+    DEFAULT_TEMPLATE_NAME,
+    dynamic_key,
+    template_for_sample,
+)
+from honeychrome.controller_components.gating_instantiation import (
+    resolve_dynamic_dimensions_in_place,
+    sample_context_from_events,
+)
 from honeychrome.settings import traces_cache_size, traces_cache_dtype, adc_rate
 import honeychrome.settings as settings
 from honeychrome.settings import max_events_in_cache, n_channels_per_event, experiments_folder, live_data_process_repeat_time, settings_default, samples_default, channel_dict
@@ -440,6 +449,66 @@ class Controller(QObject):
         if self.bus is None:
             warnings.warn('No events bus connected')
 
+
+    def _active_dynamic_specs(self, mode_key):
+        """Dynamic dimension specs for the current sample's template, or {}.
+
+        ``mode_key`` is ``'raw'`` or ``'unmixed'`` (the two template modes).
+        Missing templates/assignments fall back to the ``default`` template with
+        no dynamic dimensions, i.e. today's behaviour.
+        """
+        templates = self.experiment.cytometry.get('gating_templates') or {}
+        template_name = template_for_sample(self.current_sample_path, self.experiment.samples)
+        template = templates.get(template_name) or templates.get(DEFAULT_TEMPLATE_NAME)
+        if not template:
+            return {}
+        return (template.get('dynamic_dimensions') or {}).get(mode_key, {}) or {}
+
+    def apply_dynamic_gate_dimensions(self):
+        """Resolve dynamic (e.g. Time) gate dimensions for the loaded sample.
+
+        For gates whose dimensions are marked dynamic in the active template, the
+        bounds are resolved from this sample's own channel ranges and the affected
+        gates' lookup tables are rebuilt — so one template gates every sample by
+        the same *relative* window (e.g. middle 90% of each run) even when the
+        samples differ in duration. No dynamic specs ⇒ this is a no-op.
+        """
+        dfc = self.data_for_cytometry_plots
+        if not dfc or dfc.get('event_data') is None or not len(dfc['event_data']):
+            return
+        mode_key = 'raw' if self.current_mode == 'raw' else 'unmixed'
+        dynamic_specs = self._active_dynamic_specs(mode_key)
+        if not dynamic_specs:
+            return
+
+        context = sample_context_from_events(dfc['event_data'], dfc['pnn'])
+        affected = resolve_dynamic_dimensions_in_place(dfc['gating'], dynamic_specs, context)
+        for gate_id in affected:
+            self.calculate_lookup_tables(mode=mode_key, top_gate=gate_id)
+
+    def set_gate_dimension_dynamic(self, mode, gate_id, channel, kind='time', params=None,
+                                   template_name=DEFAULT_TEMPLATE_NAME):
+        """Mark a gate dimension as dynamic (per-sample) in a template.
+
+        Stores the spec in ``experiment.cytometry['gating_templates']`` (additive,
+        outside GatingML) and re-resolves it for the currently loaded sample.
+        ``mode`` is ``'raw'`` or ``'unmixed'``. Used by the template GUI (Phase 4)
+        and by tests; no GUI is required to exercise the runtime.
+        """
+        params = params or {}
+        templates = self.experiment.cytometry.setdefault('gating_templates', {})
+        template = templates.setdefault(
+            template_name,
+            {'raw_gml': '', 'unmixed_gml': '', 'dynamic_dimensions': {'raw': {}, 'unmixed': {}}},
+        )
+        dynamic_dimensions = template.setdefault('dynamic_dimensions', {'raw': {}, 'unmixed': {}})
+        dynamic_dimensions.setdefault(mode, {})[dynamic_key(gate_id, channel)] = {
+            'kind': kind, 'params': params,
+        }
+        # re-resolve immediately so the current view reflects the change
+        current_mode_key = 'raw' if self.current_mode == 'raw' else 'unmixed'
+        if mode == current_mode_key:
+            self.apply_dynamic_gate_dimensions()
 
     def filter_raw_fluorescence_channels(self):
         if self.experiment.process['fluorescence_channel_filter'] == 'area_only':
@@ -1196,6 +1265,11 @@ class Controller(QObject):
                                 index = self.data_for_cytometry_plots['pnn'].index(label)
                                 upper_limit = max(self.data_for_cytometry_plots['event_data'][:, index]) * 1.05
                                 transformation.set_transform(limits=[0, upper_limit])
+
+                # Per-sample gating: resolve any dynamic (e.g. Time) gate dimensions
+                # for this sample and rebuild just those gates' lookup tables, so a
+                # single template adapts to each sample's own channel range.
+                self.apply_dynamic_gate_dimensions()
 
                 self.data_for_cytometry_plots['statistics'] = initialise_stats(self.data_for_cytometry_plots['gating'])
                 self.data_for_cytometry_plots['histograms'] = initialise_hists(self.data_for_cytometry_plots['plots'], self.data_for_cytometry_plots)

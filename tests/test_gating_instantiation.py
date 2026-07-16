@@ -4,6 +4,7 @@ from flowkit import GatingStrategy, gates, Dimension
 
 from honeychrome.controller_components.gating_instantiation import (
     instantiate_template_for_sample,
+    resolve_dynamic_dimensions_in_place,
     sample_context_from_events,
 )
 from honeychrome.controller_components.gating_templates import SampleContext, dynamic_key
@@ -77,3 +78,46 @@ def test_context_feeds_instantiation_end_to_end():
     dynamic = {dynamic_key("TimeGate", "Time"): {"kind": "time", "params": {"min_frac": 0.0, "max_frac": 1.0}}}
     out = instantiate_template_for_sample(gs, dynamic, ctx)
     assert (_time_dim(out).min, _time_dim(out).max) == (100.0, 1100.0)
+
+
+# --- Phase 3 (C3.2): in-place resolution used by the live controller ---------
+
+def test_resolve_in_place_mutates_and_reports_affected():
+    gs = _time_gate_strategy(0.0, 1.0)
+    dynamic = {
+        dynamic_key("TimeGate", "Time"): {"kind": "time", "params": {"min_frac": 0.1, "max_frac": 0.9}},
+    }
+    ctx = SampleContext(channel_ranges={"Time": (0.0, 1000.0)})
+    affected = resolve_dynamic_dimensions_in_place(gs, dynamic, ctx)
+    assert affected == {"TimeGate"}
+    # the SAME strategy object was mutated (no copy), unlike instantiate_*
+    assert (_time_dim(gs).min, _time_dim(gs).max) == (100.0, 900.0)
+
+
+def test_resolve_in_place_reapply_overwrites_per_sample():
+    # loading sample A then sample B re-resolves the shared strategy each time.
+    gs = _time_gate_strategy(0.0, 1.0)
+    dynamic = {
+        dynamic_key("TimeGate", "Time"): {"kind": "time", "params": {"min_frac": 0.0, "max_frac": 1.0}},
+    }
+    resolve_dynamic_dimensions_in_place(gs, dynamic, SampleContext(channel_ranges={"Time": (0.0, 500.0)}))
+    assert (_time_dim(gs).min, _time_dim(gs).max) == (0.0, 500.0)
+    resolve_dynamic_dimensions_in_place(gs, dynamic, SampleContext(channel_ranges={"Time": (0.0, 4000.0)}))
+    assert (_time_dim(gs).min, _time_dim(gs).max) == (0.0, 4000.0)
+
+
+def test_resolve_in_place_no_specs_is_noop():
+    gs = _time_gate_strategy(0.0, 1.0)
+    affected = resolve_dynamic_dimensions_in_place(gs, {}, SampleContext(channel_ranges={"Time": (0.0, 9.0)}))
+    assert affected == set()
+    assert (_time_dim(gs).min, _time_dim(gs).max) == (0.0, 1.0)
+
+
+def test_resolve_in_place_channel_not_in_gate_is_skipped():
+    gs = _time_gate_strategy(0.0, 1.0)
+    dynamic = {
+        dynamic_key("TimeGate", "FSC-A"): {"kind": "time", "params": {"min_frac": 0.0, "max_frac": 1.0}},
+    }
+    affected = resolve_dynamic_dimensions_in_place(gs, dynamic, SampleContext(channel_ranges={"FSC-A": (0.0, 9.0)}))
+    assert affected == set()
+    assert (_time_dim(gs).min, _time_dim(gs).max) == (0.0, 1.0)

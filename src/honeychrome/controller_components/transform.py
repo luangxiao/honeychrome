@@ -35,7 +35,12 @@ class Transform:
         elif self.id == 2: #'log'
             self.set_log()
         else: #self.id == 'default':
-            self.limits[1] = max([self.limits[1], settings.default_ceiling]) # todo this is a temporary fix to the time gates issue. Should be replaced with sample gate instances for all time gates
+            # Per-sample Time axis: use the limits passed in (the controller sets
+            # these to each loaded sample's own observed range in
+            # initialise_data_for_cytometry_plots). Previously the upper limit was
+            # forced up to settings.default_ceiling, which squashed short runs and
+            # was the "temporary fix" for time gates across samples of different
+            # lengths — now the axis fits each sample.
             self.set_default()
 
     def set_linear(self):

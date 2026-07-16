@@ -120,9 +120,9 @@ Each checkpoint is independently testable; ✅ = implemented on this branch so f
 
 **Phase 3 — Runtime instantiation + per-sample lookup tables**
 - [x] C3.1 `instantiate_template_for_sample` returns a `GatingStrategy` equal to today's for absolute-only templates, and resolves dynamic (Time) dims per sample. *(gating_instantiation.py + tests done)*
-- [ ] C3.2 Dynamic (Time) gate produces a per-sample lookup table; `apply_gates_in_place` uses it. *(live-pipeline wiring — needs app validation)*
-- [ ] C3.3 Time index-clamp hack removed; membership correct across samples with different durations.
-- [ ] C3.4 Static tables still shared/cached per template (no perf regression for absolute gates).
+- [x] C3.2 Dynamic (Time) gate produces a per-sample lookup table; `apply_gates_in_place` uses it. *(`resolve_dynamic_dimensions_in_place` + `Controller.apply_dynamic_gate_dimensions`/`set_gate_dimension_dynamic`, called on sample load; verified end-to-end on 5 real tubes 0..8282 → 0..24847, each keeping the same 90% relative Time window)*
+- [x] C3.3 Time index-clamp reduced to a one-bin sentinel guard; membership correct across samples with different durations. *(per-sample rebuild removes the large mismatch; comment updated in `apply_gates_in_place`)*
+- [x] C3.4 Static tables still shared/cached per template (per-sample rebuild is scoped to dynamic gates via `top_gate=gate_id`; absolute-only experiments hit the early return — no perf regression).
 
 **Phase 4 — GUI**
 - [ ] C4.1 Template panel: create/duplicate/rename/delete + assign current sample.
