@@ -35,7 +35,7 @@ import time
 import json
 import sys
 from copy import deepcopy
-from pathlib import Path
+from pathlib import Path, PurePath
 from flowkit import GatingStrategy, Dimension, gates
 import numpy as np
 import warnings
@@ -88,6 +88,76 @@ def check_fcs_matches_experiment(sample_full_path, experiment_pnn_raw, magnitude
     # This permits FACSDiscover files with different derived-parameter sets to coexist.
     channels_match = set(experiment_pnn_raw).issubset(set(sample_pnn))
     return channels_match
+
+
+# Fields holding experiment-relative sample paths (sample keys): dicts keyed by them, and lists of them
+SAMPLE_KEYED_FIELDS = ('all_samples', 'all_sample_nevents', 'sample_af_profiles',
+                       'bead_scatter_scores', 'bead_scatter_centres')
+SAMPLE_LIST_FIELDS = ('single_stain_controls', 'unstained_samples', 'bead_samples', 'bead_checked_samples')
+CUSTOM_GATE_FIELDS = ('raw_custom_sample_gates', 'unmixed_custom_sample_gates')
+
+
+def native_sample_path(path):
+    """A sample path with this system's separator, whichever system wrote it."""
+    if not isinstance(path, str) or not path:
+        return path
+    return str(PurePath(path.replace('\\', '/')))
+
+
+def portable_sample_path(path):
+    """A sample path with '/' separators, as stored in a .kit."""
+    if not isinstance(path, str) or os.sep == '/':
+        return path
+    return path.replace(os.sep, '/')
+
+
+def convert_sample_paths(samples: dict, cytometry: dict, process: dict, convert) -> tuple:
+    """Copies of the three sections with every stored sample path passed through
+    *convert*; the arguments are not changed."""
+    def keys(d):
+        return {convert(k): v for k, v in d.items()} if isinstance(d, dict) else d
+
+    def items(values):
+        return [convert(v) for v in values] if isinstance(values, list) else values
+
+    samples = dict(samples)
+    for field in SAMPLE_KEYED_FIELDS:
+        if field in samples:
+            samples[field] = keys(samples[field])
+    for field in SAMPLE_LIST_FIELDS:
+        if field in samples:
+            samples[field] = items(samples[field])
+
+    cytometry = dict(cytometry)
+    for field in CUSTOM_GATE_FIELDS:
+        if field in cytometry:
+            cytometry[field] = keys(cytometry[field])
+
+    process = dict(process)
+    profiles = process.get('af_profiles')
+    if isinstance(profiles, dict):
+        process['af_profiles'] = {
+            name: ({**entry, 'source_fcs': convert(entry['source_fcs'])}
+                   if isinstance(entry, dict) and 'source_fcs' in entry else entry)
+            for name, entry in profiles.items()}
+    noise = process.get('noise_model')
+    if isinstance(noise, dict) and 'unstained' in noise:
+        process['noise_model'] = {**noise, 'unstained': convert(noise['unstained'])}
+    corrections = process.get('spectral_corrections')
+    if isinstance(corrections, dict) and isinstance(corrections.get('groups'), dict):
+        groups = {}
+        for name, group in corrections['groups'].items():
+            if isinstance(group, dict):
+                group = dict(group)
+                if 'samples' in group:
+                    group['samples'] = items(group['samples'])
+                if 'unstained' in group:
+                    group['unstained'] = convert(group['unstained'])
+                if 'events' in group:
+                    group['events'] = keys(group['events'])
+            groups[name] = group
+        process['spectral_corrections'] = {**corrections, 'groups': groups}
+    return samples, cytometry, process
 
 class ExperimentModel:
     def __init__(self):
@@ -197,6 +267,8 @@ class ExperimentModel:
 
         self.cytometry.setdefault('raw_custom_sample_gates', {})
         self.cytometry.setdefault('unmixed_custom_sample_gates', {})
+        self.samples, self.cytometry, self.process = convert_sample_paths(
+            self.samples, self.cytometry, self.process, native_sample_path)
 
         self.experiment_id = str(file_data.get('experiment_id') or '')
         self.legacy_plugin_state = bool(file_data.get('legacy_plugin_state', False))
@@ -209,11 +281,13 @@ class ExperimentModel:
     def save(self):
         if self.experiment_path is None:
             raise ValueError("No file path set for saving")
+        samples, cytometry, process = convert_sample_paths(
+            self.samples, self.cytometry, self.process, portable_sample_path)
         file_data = {
             'settings':self.settings,
-            'samples':self.samples,
-            'process':self.process,
-            'cytometry':self.cytometry,
+            'samples':samples,
+            'process':process,
+            'cytometry':cytometry,
             'statistics':self.statistics,
             'experiment_id': self.experiment_id,
         }
