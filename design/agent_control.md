@@ -262,6 +262,9 @@ Read tools
 | `get_plot_image(scope, plot_index)` | PNG + axis ranges | plot widget |
 | `summarise_plot(scope, plot_index)` | percentiles and density peaks (§5.5) | event data + gate membership |
 | `get_spectral_model` | controls, unmixing method, condition number | `experiment.process` |
+| `get_spectral_profiles(labels?)` | each control's spectrum per detector and its peak | `process['profiles']` |
+| `get_spectral_matrix(matrix)` | similarity, hotspot, unmixing or spillover matrix with row/column names | the Spectral Process heatmap viewers |
+| `get_gate_intensities(scope, gates?, channels?)` | median, mean, SD, CV, robust CV per gate and channel | event data + gate membership |
 
 Write tools
 
@@ -282,9 +285,18 @@ Write tools
 | `customise_gate`, `revert_gate` | per-sample custom gate | existing bus signals |
 | `refresh_unmixing()` | recalculates the unmixing | `spectralModelUpdated` |
 | `save_experiment()` | saves the `.kit` | `saveExpRequested` |
+| `new_experiment(name, template?)` | creates an experiment in `~/Experiments` | `load_main_window_with_experiment_and_template(new=True)` |
+| `set_sample_flags(sample, unstained?, beads?)` | marks a sample unstained / beads | sample panel `toggle_unstained` / `toggle_beads` |
+| `generate_sample_report()` | Word report of the loaded sample | sample panel `generate_report` |
+| `add_ribbon_plot(scope, source_gate?)` | all-fluorescence ribbon plot | `newPlotRequested('All Fluorescence')` |
+| `move_plot(scope, plot_index, destination)` | start / left / right / end | grid `permute_plot_widgets` |
+| `set_axis_parameters(scope, channel, ...)` | T, logicle W/M/A, linear and log parameters, visible range | `Transform` + `axisTransformed` |
+| `rename_gate(scope, gate_name, new_name)` | renames everywhere, as renaming the ROI label | `rename_gate` + `rawGateRenamed` + sync signals |
+| `adopt_gate_as_template(scope, gate_name)` | the sample's custom gate becomes the template | `adoptGateRequested` |
+| `set_spillover_value(row, column, value)` | edits one fine-tuning cell | spillover editor model + `reapply_fine_tuning` |
 
 Still to do: exporting statistics, the Simple Stats comparison across samples,
-editing the spectral model, and the plugin tabs.
+exporting unmixed FCS, editing the spectral model, and the plugin tabs.
 
 Every tool has a JSON schema with enums for scope (`raw`, `unmixed`) and gate
 type, so that the agent gets argument errors before anything runs.

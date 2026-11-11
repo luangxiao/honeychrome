@@ -168,6 +168,9 @@ Agent 先提出一个门并画出来，再用 `get_statistics` 和 `get_plot_ima
 | `get_plot_image(scope, plot_index)` | PNG + 坐标轴范围 | 图控件 |
 | `summarise_plot(scope, plot_index)` | 分位数和密度峰（§5.5） | 事件数据 + 门归属 |
 | `get_spectral_model` | 对照、解混方法、条件数 | `experiment.process` |
+| `get_spectral_profiles(labels?)` | 每个对照在各检测器上的光谱及峰值检测器 | `process['profiles']` |
+| `get_spectral_matrix(matrix)` | 相似度、hotspot、解混或 spillover 矩阵及行列名 | Spectral Process 里的热图控件 |
+| `get_gate_intensities(scope, gates?, channels?)` | 每个门、每个通道的中位数、均值、SD、CV、robust CV | 事件数据 + 门归属 |
 
 写操作工具
 
@@ -188,8 +191,17 @@ Agent 先提出一个门并画出来，再用 `get_statistics` 和 `get_plot_ima
 | `customise_gate`、`revert_gate` | 样本自定义门 | 现有总线信号 |
 | `refresh_unmixing()` | 重新计算解混 | `spectralModelUpdated` |
 | `save_experiment()` | 保存 `.kit` | `saveExpRequested` |
+| `new_experiment(name, template?)` | 在 `~/Experiments` 中新建实验 | `load_main_window_with_experiment_and_template(new=True)` |
+| `set_sample_flags(sample, unstained?, beads?)` | 标记样本为未染色/微球 | 样本面板的 `toggle_unstained` / `toggle_beads` |
+| `generate_sample_report()` | 生成当前样本的 Word 报告 | 样本面板的 `generate_report` |
+| `add_ribbon_plot(scope, source_gate?)` | 全荧光 ribbon 图 | `newPlotRequested('All Fluorescence')` |
+| `move_plot(scope, plot_index, destination)` | 移到开头/左移/右移/末尾 | grid 的 `permute_plot_widgets` |
+| `set_axis_parameters(scope, channel, ...)` | T、logicle W/M/A、线性和 log 参数、可见范围 | `Transform` + `axisTransformed` |
+| `rename_gate(scope, gate_name, new_name)` | 全局重命名，同在图上改 ROI 标签 | `rename_gate` + `rawGateRenamed` + 同步信号 |
+| `adopt_gate_as_template(scope, gate_name)` | 样本的自定义门变为模板 | `adoptGateRequested` |
+| `set_spillover_value(row, column, value)` | 修改微调矩阵的一个格子 | spillover 编辑器模型 + `reapply_fine_tuning` |
 
-尚未实现：导出统计、Simple Stats 的跨样本比较、编辑光谱模型、插件标签页。
+尚未实现：导出统计、Simple Stats 的跨样本比较、导出解混 FCS、编辑光谱模型、插件标签页。
 
 每个工具都有 JSON schema，scope（`raw`、`unmixed`）和门类型用枚举表示，参数错误在执行前就能被发现。
 
