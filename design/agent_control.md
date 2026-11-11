@@ -36,9 +36,10 @@ Non-goals (for the first version)
 
 ## 3. User experience
 
-1. The user ticks **Edit > App Configuration > Enable agent control** and restarts.
-   The status bar shows `Agent control: listening on 127.0.0.1:<port>` and a
-   **Copy connection settings** button copies the client config with its token.
+1. The user ticks **Edit > App Configuration > Let AI agents control Honeychrome**
+   and presses OK. The status bar shows `Agent control: on (http://127.0.0.1:<port>/mcp)`,
+   and **Copy client settings (mcp.json)** in the same dialog copies the client
+   config with its token.
 2. The user pastes the settings into their MCP client, opens an experiment in
    Honeychrome and asks, for example:
 
@@ -62,7 +63,7 @@ flowchart LR
     A[AI agent / MCP client]
   end
   subgraph Honeychrome process
-    S[MCP server<br/>asyncio, background thread<br/>127.0.0.1 + token]
+    S[MCP server<br/>stdlib HTTP, background threads<br/>127.0.0.1 + token]
     B[AgentBridge<br/>QObject on main thread<br/>one call at a time]
     T[AgentTools<br/>tool implementations]
     C[Controller]
@@ -86,31 +87,38 @@ agent layer plugs into the same bus, so the widgets need no changes.
 
 ### 4.1 New modules
 
-All agent code lives in a new package, `src/honeychrome/agent_control/`. It is
-imported only when the feature is enabled.
+All agent code lives in a new package, `src/honeychrome/agent_control/`. Only
+`__init__.py` is imported at startup; the rest is imported when the server starts.
 
 | Module | Role |
 |---|---|
-| `server.py` | Starts and stops the MCP server on a background thread; registers the tools; checks the token |
-| `bridge.py` | `AgentBridge(QObject)`: runs a tool on the Qt main thread and hands the result back to the server thread |
-| `tools.py` | `AgentTools`: one method per tool; the only code that touches the controller, bus and widgets |
-| `coordinates.py` | Converts gate coordinates between data units and plot coordinates |
-| `messages.py` | Captures `popupMessage`/`warningMessage` while an agent call is running |
+| `__init__.py` | `AgentControl`: settings (enabled, port, token), start/stop, status-bar indicator |
+| `server.py` | The MCP server on a background thread: JSON-RPC handling, tool list, argument checks, token and origin checks |
+| `bridge.py` | `AgentBridge(QObject)`: runs a tool on the Qt main thread, one at a time, and captures the messages Honeychrome shows meanwhile |
+| `tools.py` | One function per tool; the only code that touches the controller, bus and widgets |
+| `coordinates.py` | Converts gate coordinates between data units and plot coordinates, and builds or reshapes gates as the plot widget does |
 
 ## 5. Detailed design
 
 ### 5.1 MCP server (`server.py`)
 
-- Uses the official `mcp` Python SDK (`FastMCP`) with the **Streamable HTTP**
-  transport, bound to `127.0.0.1` on a configurable port (default 8765).
-- Runs its own asyncio loop on a `threading.Thread` (daemon). It is started by
-  `View` after the main window exists and stopped on quit.
+- A minimal MCP server written with the standard library (`http.server`), using
+  the **Streamable HTTP** transport in its simplest form: every request is a
+  POST answered with one JSON response (no SSE stream, no sessions). It serves
+  tools only (`initialize`, `ping`, `tools/list`, `tools/call`), so the official
+  `mcp` SDK, with its `pydantic`/`starlette`/`uvicorn` dependencies and
+  PyInstaller hooks, is not needed. It binds to `127.0.0.1` on a configurable
+  port (default 8765).
+- Runs on daemon threads (`ThreadingHTTPServer`). `main()` starts it after the
+  `View` exists, when enabled, and stops it on quit.
 - Each request must carry `Authorization: Bearer <token>`. The token is random
   (`secrets.token_urlsafe(32)`), kept in QSettings, and can be regenerated from
-  App Configuration.
-- Tool handlers do no work themselves: they validate the arguments (types and
-  ranges) and call `bridge.call(tool_name, **args)`, then wait for the result
-  with a timeout.
+  App Configuration. Requests with a non-local browser `Origin` are refused.
+- Tool handlers do no work themselves: they check the arguments against the
+  tool's schema (types, enums, required, no extras) and call
+  `bridge.call(tool_name, args)`, which waits for the result with a timeout.
+  Argument and tool errors are returned as tool results with `isError: true`, so
+  the agent can correct itself; an unknown tool is a JSON-RPC error.
 
 Why not stdio: stdio means the client starts the server process. Here the server
 must live inside the GUI process that the user already has open. A local HTTP
@@ -202,8 +210,9 @@ Gate names must be unique within the scope. If a gate with the same name exists,
 `create_gate` fails unless `replace=true` is given. Deleting a gate removes its
 descendants, so `delete_gate` needs confirmation (§6).
 
-If a sample has a custom version of the gate, `update_gate` edits the template
-by default; `customise_gate` and `revert_gate` map one-to-one to the existing
+If a sample has a custom version of the gate, `update_gate` changes that
+version, as dragging the ROI does; otherwise it changes the gate shared by all
+samples. `customise_gate` and `revert_gate` map one-to-one to the existing
 `customiseGateRequested` and `revertGateRequested` signals.
 
 ### 5.5 Seeing the data
@@ -228,41 +237,54 @@ expected to look at them.
   ([view.py](../src/honeychrome/view.py)). While an agent call is running, `messages.py`
   diverts them: the text goes into the tool result instead of a dialog. Outside
   agent calls nothing changes.
+- The text is captured when `popupMessage`/`warningMessage` is emitted, not when
+  the dialog opens: `warning_message` re-queues itself while a busy-cursor job
+  runs (up to about 10 s), so the dialog can open after the tool call has
+  returned.
 - Tools never open file dialogs. They take paths as arguments, and the paths are
   checked (§6).
 - Any other modal dialog reached from a tool's code path is a bug in the tool;
   tests use the existing `qt-testing` guards that fail on unexpected pop-ups.
 
-### 5.7 First tool set (Phases 0 and 1)
+### 5.7 Tool set (implemented)
 
 Read tools
 
 | Tool | Returns | Source |
 |---|---|---|
-| `get_state` | experiment path, current tab/scope, current sample, job-gate holder | controller, `job_gate.holder` |
-| `list_samples` | sample keys and names, controls, unstained, beads | `experiment.samples` |
-| `list_channels(scope)` | PnN and display labels | `data_for_cytometry_plots_*['pnn']` |
-| `get_gating_tree(scope)` | gate names, types, parents, custom flag for the current sample | gating strategy |
+| `get_state` | experiment path, tabs and current tab/scope, current sample, job-gate holder | controller, `job_gate` |
+| `list_experiments` | recent `.kit` files and those in `~/Experiments` | recent files QSettings |
+| `list_samples(filter?)` | sample keys and names, events, controls, unstained, beads | `experiment.samples` |
+| `list_channels(scope)` | PnN, display labels, transform, visible range | `data_for_cytometry_plots_*` |
+| `get_gating_tree(scope)` | gate names, types, parents, geometry in data units, plots, custom flag | gating strategy |
 | `list_plots(scope)` | index, type, channels, source gate, child gates | `data_for_cytometry_plots_*['plots']` |
-| `get_statistics(scope, gates?)` | counts and percentages (of parent, of total) | `data_for_cytometry_plots_*['statistics']` |
+| `get_statistics(scope)` | counts and percentages (of parent, of total) | `data_for_cytometry_plots_*['statistics']` |
 | `get_plot_image(scope, plot_index)` | PNG + axis ranges | plot widget |
-| `summarise_plot(scope, plot_index)` | text summary (§5.5) | event data + gate membership |
+| `summarise_plot(scope, plot_index)` | percentiles and density peaks (§5.5) | event data + gate membership |
+| `get_spectral_model` | controls, unmixing method, condition number | `experiment.process` |
 
 Write tools
 
 | Tool | Does | Path |
 |---|---|---|
+| `open_experiment(path)` | opens a `.kit` from `list_experiments` | `loadExpRequested` |
 | `switch_tab(name)` | shows Raw Data / Unmixed Data / Spectral Process / ... | `tabs.setCurrentIndex` |
-| `load_sample(sample)` | selects and loads a sample | `selectSample` + `loadSampleRequested` |
-| `add_plot(scope, x, y, source_gate)` | new plot, then sets its source gate | `create_new_plot` + `change_plot` |
-| `create_gate(scope, plot_index, name, type, coords, replace?)` | §5.4 | `create_or_update_gate` + sync signals |
-| `update_gate(scope, name, coords)` | moves or reshapes a gate | same |
-| `delete_gate(scope, name)` | removes a gate and its children (confirmation required) | gating strategy + sync signals |
+| `load_sample(sample)` | selects and loads a sample | `selectSample` (+ `loadSampleRequested`) |
+| `add_plot(scope, x, y?, source_gate?)` | new 2D or 1D plot | `newPlotRequested` + `plotChangeRequested` |
+| `delete_plot(scope, plot_index)` | removes a plot and its gates (confirmation if it has gates) | grid `proceed_to_delete_plot` |
+| `set_plot_source_gate(scope, plot_index, gate)` | changes a plot's source gate | plot widget `set_source_gate` |
+| `set_plot_channels(scope, plot_index, x, y?)` | changes channels of a plot without gates | `plotChangeRequested` |
+| `set_axis_transform(scope, channel, transform)` | linear / logicle / log | `axisTransformed` |
+| `fit_axes_to_data(scope, plot_index)` | as the plot menu | plot widget |
+| `create_gate(scope, plot_index, gate_type, coordinates, name?, units?)` | §5.4 | gating + sync signals |
+| `update_gate(scope, gate_name, coordinates, units?)` | moves or reshapes a gate | same |
+| `delete_gate(scope, gate_name)` | removes a gate, children move up (confirmation) | gating + sync signals |
 | `customise_gate`, `revert_gate` | per-sample custom gate | existing bus signals |
+| `refresh_unmixing()` | recalculates the unmixing | `spectralModelUpdated` |
 | `save_experiment()` | saves the `.kit` | `saveExpRequested` |
 
-Phase 2 adds `refresh_unmixing` (`spectralModelUpdated`), reading the spectral
-model, and exporting statistics to CSV inside the experiment folder.
+Still to do: exporting statistics, the Simple Stats comparison across samples,
+editing the spectral model, and the plugin tabs.
 
 Every tool has a JSON schema with enums for scope (`raw`, `unmixed`) and gate
 type, so that the agent gets argument errors before anything runs.
@@ -290,18 +312,10 @@ type, so that the agent gets argument errors before anything runs.
 
 ## 8. Packaging and configuration
 
-- New optional extra in `pyproject.toml`: `agent = ["mcp==<pinned>"]`. The
-  release installers include it; plain `pip install honeychrome` does not. If
-  `mcp` is not importable, the App Configuration checkbox is disabled with a
-  tooltip.
-- PyInstaller: the `mcp` SDK pulls in `pydantic`, `anyio`, `starlette`,
-  `uvicorn`, `httpx` and `sse-starlette`. These need hidden imports; a new
-  `hooks/hook-mcp.py` collects the submodules. Bundle size and startup time must
-  be measured. Imports are lazy, so startup is unchanged when the feature is off.
-- QSettings keys: `AgentControlEnabled` (bool), `AgentControlPort` (int),
-  `AgentControlToken` (str).
-- Adding a dependency needs the maintainers' agreement (AGENTS.md). The first PR
-  should be this design, before any dependency change.
+- No new dependency: the server uses only the standard library, so
+  `pyproject.toml` and the PyInstaller hooks are unchanged.
+- QSettings keys (`app_configuration`): `agent_control_enabled` (bool),
+  `agent_control_port` (int), `agent_control_token` (str).
 
 Client configuration (VS Code `mcp.json`, copied by the app):
 
@@ -340,9 +354,8 @@ Client configuration (VS Code `mcp.json`, copied by the app):
 
 | Phase | Scope | Changes outside `agent_control/` |
 |---|---|---|
-| 0 | Server, bridge, token, App Configuration toggle, read tools, `get_plot_image` | `view.py` (start/stop), `configuration_dialogs.py` (toggle), `pyproject.toml`, PyInstaller hook |
-| 1 | Write tools of §5.7, pop-up capture, backup, confirmation | `view.py` (pop-up diversion hook) |
-| 2 | Spectral process: read the model, refresh unmixing, export statistics | none expected |
+| 0 + 1 (done) | Server, bridge, token, App Configuration section, read and write tools of §5.7, pop-up capture, backup, confirmation | `view.py` (manager, pop-up diversion, indicator), `main.py` (start/stop), `configuration_dialogs.py` (settings) |
+| 2 | Statistics export, Simple Stats comparison across samples, spectral model editing | none expected |
 | 3 | Plugin tabs | move plugin logic out of widgets first; each plugin can register its own tools through `tab_plugins` |
 
 ## 11. Alternatives considered
@@ -361,14 +374,13 @@ Client configuration (VS Code `mcp.json`, copied by the app):
 
 ## 12. Open questions
 
-1. `mcp` SDK support for Python 3.14 and its pinned version. This must be checked
-   before Phase 0.
-2. The added size of the PyInstaller bundle, and whether macOS signing and
-   notarisation are affected.
-3. Whether the confirmation for destructive tools should always be a Honeychrome
+1. Whether to move to the official `mcp` SDK later (SSE streaming, progress
+   notifications, elicitation). That would add dependencies and PyInstaller
+   hooks; the current tools do not need it.
+2. Whether the confirmation for destructive tools should stay a Honeychrome
    dialog (works with every client) rather than MCP elicitation.
-4. Whether tools should take gate coordinates in data units only, or also accept
-   plot coordinates (0-1) for agents that work from the image.
-5. Whether `load_sample` should load through `selectSample` alone (if selecting in
-   the tree already triggers the load) or also emit `loadSampleRequested`. This is
-   to be confirmed in Phase 0.
+3. Whether tools should take gate coordinates in data units only, or also accept
+   plot coordinates (0-1) for agents that work from the image. (Implemented:
+   both, with `units`.)
+4. `load_sample` emits `selectSample`, which selects the row and loads the
+   sample; `loadSampleRequested` is emitted only if that did not load it.
